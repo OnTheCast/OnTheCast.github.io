@@ -1,0 +1,84 @@
+name: Deploy with ghmd-js
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Build HTML using ghmd-js with .ghmdignore
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p public
+
+          FIND_EXCLUDES=(-not -path "./node_modules/*" -not -path "./.github/*" -not -name "README.md")
+
+          if [ -f .ghmdignore ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              [[ -z "$line" || "$line" =~ ^# ]] && continue
+              
+              FIND_EXCLUDES+=(-not -path "./$line*" -not -name "$line")
+            done < .ghmdignore
+          fi
+
+          find . -type f -name "*.md" "${FIND_EXCLUDES[@]}" -exec npx ghmd-js {} --embed-css \;
+
+          if [ -f README.md ]; then
+            npx ghmd-js README.md --embed-css
+            mv README.html public/index.html
+          fi
+
+          mv *.html public/ 2>/dev/null || true
+
+          find public -type f -name "*.html" -exec sed -i 's/href="\([^":]*\)\.md\([^"]*\)"/href="\1\2"/g' {} +
+
+          mv favicon.ico public/ 2>/dev/null || true
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: 'public'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy public --project-name=onthecast
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
